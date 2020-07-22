@@ -1,4 +1,4 @@
-SET ECLIPSEC_LUNA=C:\Eclipse_Luna\eclipsec.exe
+SET ECLIPSEC_MARS=C:\Users\Scott\eclipse\cpp-mars\eclipse\eclipsec.exe
 SET ECLIPSEC_JUNO=C:\Eclipse\eclipsec.exe
 REM Build all binaries
 
@@ -13,12 +13,11 @@ call ant clean build
 popd
 
 REM
-REM Begin a command-line "clean build" of the navx frc java library
+REM Copy navx protocol java library file to project folders that need it.
 REM
 
-pushd .\roborio\java\navx_frc
-call ant clean build
-popd
+mkdir .\processing\libraries\navx\library\
+copy .\java\navx\jar\*.jar .\processing\libraries\navx\library\ /Y
 
 REM
 REM Copy the navX protocol library .h files to the 
@@ -27,26 +26,6 @@ REM
 
 cp ./stm32/navx-mxp/IMU*.h  ./arduino/navXTestJig/
 cp ./stm32/navx-mxp/AHRS*.h ./arduino/navXTestJig/
-cp ./stm32/navx-mxp/IMU*.h  ./roborio/c++/navx_frc_cpp/src
-cp ./stm32/navx-mxp/AHRS*.h ./roborio/c++/navx_frc_cpp/src
-
-REM
-REM Begin a command-line "clean build" of the navx frc C++ library
-REM
-
-pushd .\roborio\c++
-rm -r -f ./build_workspace_luna
-mkdir build_workspace_luna
-
-%ECLIPSEC_LUNA% -nosplash -application org.eclipse.cdt.managedbuilder.core.headlessbuild -data ./build_workspace_luna -import ./navx_frc_cpp -cleanBuild navx_frc_cpp/Debug
-popd
-
-REM
-REM Copy navx protocol java library file to project folders that need it.
-REM
-
-mkdir .\processing\libraries\navx\library\
-copy .\java\navx\jar\*.jar .\processing\libraries\navx\library\ /Y
 
 REM
 REM Begin a command-line "clean build" of the Debug version of the navx-mxp firmware
@@ -81,7 +60,9 @@ for /f %%i in ('git rev-list --count --first-parent HEAD') do set VER_REVISION=%
 set REVISION_STRING=%VER_MAJOR%.%VER_MINOR%.%VER_REVISION%
 REM Place version string into setup script 
 @echo on
-
+pushd build
+echo %REVISION_STRING% > version.txt
+popd
 copy .\stm32\navX-MXP_Debug\navx-mxp.hex .\stm32\bin\navx-mxp_%REVISION_STRING%.hex
 copy .\stm32\navX-Micro_Debug\navx-micro.hex .\stm32\bin\navx-micro_%REVISION_STRING%.hex
 
@@ -95,12 +76,48 @@ REM Build Processing components
 call buildprocessing.bat
 popd
 
+REM
+REM Begin a command-line "clean build" of the navx frc C++ library
+REM
+
+pushd .\roborio\c++\navx_frc_cpp
+call gradlew clean
+REM Build the Athena (RoboRIO), Raspbian and Windows x86 library versions
+call gradlew navx_frcLinuxathenaReleaseSharedLibrary
+call gradlew navx_frcLinuxraspbianReleaseStaticLibrary
+call gradlew navx_frcWindowsx86-64ReleaseSharedLibrary
+REM For now, publish to a local maven repo, for access by setup builder and the maven_deploy script.
+REM The local maven repo is at %HOMEDRIVE%%HOMEPATH%\.m2\repository
+call gradlew publishCppPublicationToMavenLocal
+REM rm -r -f ./build_workspace_luna
+REM mkdir build_workspace_luna
+
+REM %ECLIPSEC_MARS% -nosplash -application org.eclipse.cdt.managedbuilder.core.headlessbuild -data ./build_workspace_luna -import ./navx_frc_cpp -cleanBuild navx_frc_cpp/Debug
+popd
+
+REM
+REM Begin a command-line "clean build" of the navx frc Java library
+REM
+
+pushd .\roborio\java\navx_frc
+REM call ant clean build
+call gradlew clean
+call gradlew build
+REM For now, publish to a local maven repo, for access by setup builder and the maven_deploy script.
+REM The local maven repo is at %HOMEDRIVE%%HOMEPATH%\.m2\repository
+call gradlew publishMavenJavaPublicationToMavenLocal
+popd
+
 REM Build FTC Library
 pushd .\android\navx_ftc
 rmdir /S /Q build
 call gradlew.bat assembleDebug
 call gradlew.bat assembleRelease
 popd
+
+REM Update FRC vendordeps file with latest version number.
+copy .\build\vendordeps\navx_frc.json.template .\build\vendordeps\navx_frc.json
+Powershell -command "(get-content .\build\vendordeps\navx_frc.json) -replace ('0.0.000','%REVISION_STRING%') | out-file .\build\vendordeps\navx_frc.json  -encoding ASCII"
 
 REM Build setup program
 
@@ -115,7 +132,6 @@ del .\setup\navx-mxp-setup-orig.iss
 copy .\setup\navx-micro-setup.iss .\setup\navx-micro-setup-orig.iss 
 Powershell -command "(get-content .\setup\navx-micro-setup.iss) -replace ('0.0.000','%REVISION_STRING%') | out-file .\setup\navx-micro-setup.iss -encoding ASCII"
 pushd build
-echo %REVISION_STRING% > version.txt
 call buildsetup_navx-micro.bat
 popd
 copy .\setup\navx-micro-setup-orig.iss .\setup\navx-micro-setup.iss

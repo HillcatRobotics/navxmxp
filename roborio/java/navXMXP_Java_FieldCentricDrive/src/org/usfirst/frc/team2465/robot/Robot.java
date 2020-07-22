@@ -5,9 +5,10 @@ import com.kauailabs.navx.frc.AHRS;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.SPI;
 import edu.wpi.first.wpilibj.SampleRobot;
-import edu.wpi.first.wpilibj.RobotDrive;
+import edu.wpi.first.wpilibj.Spark;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.drive.MecanumDrive;
 
 /**
  * This is a demo program showing the use of the navX MXP to implement
@@ -24,17 +25,41 @@ import edu.wpi.first.wpilibj.Timer;
 
 public class Robot extends SampleRobot {
     AHRS ahrs;
-    RobotDrive myRobot;
+    MecanumDrive myRobot;
     Joystick stick;
 
+    // Channels for the wheels
+    final static int frontLeftChannel	= 2;
+    final static int rearLeftChannel	= 3;
+    final static int frontRightChannel	= 1;
+    final static int rearRightChannel	= 0;
+    
+    Spark frontLeft;
+    Spark rearLeft;
+    Spark frontRight;
+    Spark rearRight;
+            
     public Robot() {
-        myRobot = new RobotDrive(0, 1);
+    	frontLeft = new Spark(frontLeftChannel);
+    	rearLeft = new Spark(rearLeftChannel);
+    	frontRight = new Spark(frontRightChannel);
+    	rearRight = new Spark(rearRightChannel);
+        myRobot = new MecanumDrive(frontLeft, rearLeft, 
+  				 frontRight, rearRight);
         myRobot.setExpiration(0.1);
         stick = new Joystick(0);
         try {
-            /* Communicate w/navX MXP via the MXP SPI Bus.                                     */
-            /* Alternatively:  I2C.Port.kMXP, SerialPort.Port.kMXP or SerialPort.Port.kUSB     */
-            /* See http://navx-mxp.kauailabs.com/guidance/selecting-an-interface/ for details. */
+			/***********************************************************************
+			 * navX-MXP:
+			 * - Communication via RoboRIO MXP (SPI, I2C, TTL UART) and USB.            
+			 * - See http://navx-mxp.kauailabs.com/guidance/selecting-an-interface.
+			 * 
+			 * navX-Micro:
+			 * - Communication via I2C (RoboRIO MXP or Onboard) and USB.
+			 * - See http://navx-micro.kauailabs.com/guidance/selecting-an-interface.
+			 * 
+			 * Multiple navX-model devices on a single robot are supported.
+			 ************************************************************************/
             ahrs = new AHRS(SPI.Port.kMXP); 
         } catch (RuntimeException ex ) {
             DriverStation.reportError("Error instantiating navX MXP:  " + ex.getMessage(), true);
@@ -46,9 +71,9 @@ public class Robot extends SampleRobot {
      */
     public void autonomous() {
         myRobot.setSafetyEnabled(false);
-        myRobot.drive(-0.5, 0.0);	 // drive forwards half speed
-        Timer.delay(2.0);		     //  for 2 seconds
-        myRobot.drive(0.0, 0.0);	 // stop robot
+        myRobot.driveCartesian(0.0, -0.5, 0.0);	 // drive forwards half speed
+        Timer.delay(2.0);		     			 //  for 2 seconds
+        myRobot.driveCartesian(0.0, 0.0, 0.0);	 // stop robot
     }
 
     /**
@@ -57,15 +82,15 @@ public class Robot extends SampleRobot {
     public void operatorControl() {
         myRobot.setSafetyEnabled(true);
         while (isOperatorControl() && isEnabled()) {
-            if ( stick.getRawButton(0)) {
+            if ( stick.getRawButton(1)) {
                 ahrs.reset();
             }
             try {
                 /* Use the joystick X axis for lateral movement,            */
                 /* Y axis for forward movement, and Z axis for rotation.    */
                 /* Use navX MXP yaw angle to define Field-centric transform */
-                myRobot.mecanumDrive_Cartesian(stick.getX(), stick.getY(), 
-                                               stick.getTwist(), ahrs.getAngle());
+                myRobot.driveCartesian(stick.getX(), stick.getY(), 
+                                       stick.getTwist(), ahrs.getAngle());
             } catch( RuntimeException ex ) {
                 DriverStation.reportError("Error communicating with drive system:  " + ex.getMessage(), true);
             }

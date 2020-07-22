@@ -32,20 +32,28 @@ class SerialIO implements IIOProvider {
     private IMUProtocol.GyroUpdate gyro_update_data;
     private AHRSProtocol.AHRSUpdate ahrs_update_data;
     private AHRSProtocol.AHRSPosUpdate ahrspos_update_data;
+    private AHRSProtocol.AHRSPosTSUpdate ahrspos_ts_update_data;
     private AHRSProtocol.BoardID board_id;
     IIOCompleteNotification notify_sink;
     IIOCompleteNotification.BoardState board_state;
     IBoardCapabilities board_capabilities;
     double last_valid_packet_time;
 
-    final boolean debug = false; /* Set to true to enable debug output (to smart dashboard) */
+    boolean debug = false; /* Set to true to enable debug output (to smart dashboard) */
+    boolean is_usb;
+    boolean connect_reported;
+    boolean disconnect_reported;    
     
     public SerialIO( SerialPort.Port port_id, byte update_rate_hz, boolean processed_data, IIOCompleteNotification notify_sink, IBoardCapabilities board_capabilities ) {
         this.serial_port_id = port_id;
+        is_usb = ((port_id == SerialPort.Port.kUSB) ||
+        		  (port_id == SerialPort.Port.kUSB1)||
+        		  (port_id == SerialPort.Port.kUSB2));
         ypr_update_data = new IMUProtocol.YPRUpdate();
         gyro_update_data = new IMUProtocol.GyroUpdate();
         ahrs_update_data = new AHRSProtocol.AHRSUpdate();
         ahrspos_update_data = new AHRSProtocol.AHRSPosUpdate();
+        ahrspos_ts_update_data = new AHRSProtocol.AHRSPosTSUpdate();
         board_id = new AHRSProtocol.BoardID();
         board_state = new IIOCompleteNotification.BoardState();
         this.notify_sink = notify_sink;
@@ -53,21 +61,30 @@ class SerialIO implements IIOProvider {
         serial_port = getMaybeCreateSerialPort();
         this.update_rate_hz = update_rate_hz;
         if ( processed_data ) {
-            update_type = AHRSProtocol.MSGID_AHRSPOS_UPDATE;
+            update_type = AHRSProtocol.MSGID_AHRSPOS_TS_UPDATE;
         } else {
             update_type = IMUProtocol.MSGID_GYRO_UPDATE;
         }
+        connect_reported = 
+            disconnect_reported = false;        
     }
     
     protected SerialPort resetSerialPort()
     {
         if (serial_port != null) {
+            if (connect_reported && !disconnect_reported && !isConnected()) {
+                notify_sink.disconnectDetected();
+                connect_reported = false;
+                disconnect_reported = true;
+            }            
+    		System.out.println("Closing " + (is_usb ? "USB " : "TTL UART ") + " serial port to communicate with navX-MXP/Micro"); 
             try {
-                serial_port.free();
+                serial_port.close();
             } catch (Exception ex) {
                 // This has been seen to happen before....
             }
             serial_port = null;
+            Timer.delay(1.0);
         }
         serial_port = getMaybeCreateSerialPort();
         return serial_port;
@@ -77,6 +94,7 @@ class SerialIO implements IIOProvider {
     {
         if (serial_port == null) {
             try {
+        		System.out.println("Opening " + (is_usb ? "USB " : "TTL UART ") + " serial port to communicate with navX-MXP/Micro"); 
                 serial_port = new SerialPort(57600, serial_port_id);
                 serial_port.setReadBufferSize(256);
                 serial_port.setTimeout(1.0);
@@ -84,6 +102,7 @@ class SerialIO implements IIOProvider {
                 serial_port.reset();
             } catch (Exception ex) {
                 /* Error opening serial port. Perhaps it doesn't exist... */
+        		System.out.println("Error opening " + (is_usb ? "USB " : "TTL UART ") + " serial port to communicate with navX-MXP/Micro"); 
                 serial_port = null;
             }
         }
@@ -99,34 +118,56 @@ class SerialIO implements IIOProvider {
     protected void dispatchStreamResponse(IMUProtocol.StreamResponse response) {
         board_state.cal_status = (byte) (response.flags & IMUProtocol.NAV6_FLAG_MASK_CALIBRATION_STATE);
         board_state.capability_flags = (short) (response.flags & ~IMUProtocol.NAV6_FLAG_MASK_CALIBRATION_STATE);
-        board_state.op_status = 0x04; /* TODO:  Create a symbol for this */
-        board_state.selftest_status = 0x07; /* TODO:  Create a symbol for this */
+
+        /* Derive reasonable operational/self-test status from the available stream response data. */
+        if (board_state.cal_status == AHRSProtocol.NAVX_CAL_STATUS_IMU_CAL_COMPLETE) {
+            board_state.op_status = AHRSProtocol.NAVX_OP_STATUS_NORMAL;
+        } else {
+            board_state.op_status = AHRSProtocol.NAVX_OP_STATUS_IMU_AUTOCAL_IN_PROGRESS;
+        }
+        board_state.selftest_status = ( AHRSProtocol.NAVX_SELFTEST_STATUS_COMPLETE |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_GYRO_PASSED |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_ACCEL_PASSED |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_BARO_PASSED );
+    
         board_state.accel_fsr_g = response.accel_fsr_g;
         board_state.gyro_fsr_dps = response.gyro_fsr_dps;
         board_state.update_rate_hz = (byte) response.update_rate_hz;
-        notify_sink.setBoardState(board_state);
-        /* If AHRSPOS is update type is request, but board doesn't support it, */
-        /* retransmit the stream config, falling back to AHRS Update mode.     */
-        if ( this.update_type == AHRSProtocol.MSGID_AHRSPOS_UPDATE ) {
-            if ( !board_capabilities.isDisplacementSupported() ) {
-                this.update_type = AHRSProtocol.MSGID_AHRS_UPDATE;
-                signal_retransmit_stream_config = true;
-            }
+        notify_sink.setBoardState(board_state, true);
+        /* If AHRSPOS_TS is update type is requested, but board doesn't support it, */
+        /* retransmit the stream config, falling back to AHRSPos update mode, if    */
+        /* the board supports it, otherwise fall all the way back to AHRS Update mode. */
+        if ( response.stream_type != this.update_type ) {
+	        if ( this.update_type == AHRSProtocol.MSGID_AHRSPOS_TS_UPDATE ) {
+	        	if ( board_capabilities.isAHRSPosTimestampSupported() ) {
+	        		this.update_type = AHRSProtocol.MSGID_AHRSPOS_TS_UPDATE;
+	        	}
+	        	else if ( board_capabilities.isDisplacementSupported() ) {
+	                this.update_type = AHRSProtocol.MSGID_AHRSPOS_UPDATE;
+	            }
+	        	else {
+	        		this.update_type = AHRSProtocol.MSGID_AHRS_UPDATE;
+	        	}
+	    		signal_retransmit_stream_config = true;
+	        }
         }
     }
     
     protected int decodePacketHandler(byte[] received_data, int offset, int bytes_remaining) {
 
         int packet_length;
+        int sensor_timestamp = 0; /* Note:  Serial Protocols often don't provide sensor timestamps */
         
         if ( (packet_length = IMUProtocol.decodeYPRUpdate(received_data, offset, bytes_remaining, ypr_update_data)) > 0) {
-            notify_sink.setYawPitchRoll(ypr_update_data);
+            notify_sink.setYawPitchRoll(ypr_update_data, sensor_timestamp);
+        } else if ( ( packet_length = AHRSProtocol.decodeAHRSPosTSUpdate(received_data, offset, bytes_remaining, ahrspos_ts_update_data)) > 0) {
+            notify_sink.setAHRSPosData(ahrspos_ts_update_data, ahrspos_ts_update_data.timestamp);
         } else if ( ( packet_length = AHRSProtocol.decodeAHRSPosUpdate(received_data, offset, bytes_remaining, ahrspos_update_data)) > 0) {
-            notify_sink.setAHRSPosData(ahrspos_update_data);
+            notify_sink.setAHRSPosData(ahrspos_update_data, sensor_timestamp);
         } else if ( ( packet_length = AHRSProtocol.decodeAHRSUpdate(received_data, offset, bytes_remaining, ahrs_update_data)) > 0) {
-            notify_sink.setAHRSData(ahrs_update_data);
+            notify_sink.setAHRSData(ahrs_update_data, sensor_timestamp);
         } else if ( ( packet_length = IMUProtocol.decodeGyroUpdate(received_data, offset, bytes_remaining, gyro_update_data)) > 0) {
-            notify_sink.setRawData(gyro_update_data);
+            notify_sink.setRawData(gyro_update_data, sensor_timestamp);
         } else if ( ( packet_length = AHRSProtocol.decodeBoardIDGetResponse(received_data, offset, bytes_remaining, board_id)) > 0) {
             notify_sink.setBoardID(board_id);
         } else {
@@ -134,7 +175,7 @@ class SerialIO implements IIOProvider {
         }
         return packet_length;
     }    
-    
+
     public void run() {
 
         stop = false;
@@ -142,7 +183,7 @@ class SerialIO implements IIOProvider {
         double last_stream_command_sent_timestamp = 0.0;
         double last_data_received_timestamp = 0;
         double last_second_start_time = 0;
-
+               
         int partial_binary_packet_count = 0;
         int stream_response_receive_count = 0;
         int timeout_count = 0;
@@ -151,16 +192,6 @@ class SerialIO implements IIOProvider {
         int updates_in_last_second = 0;
         int integration_response_receive_count = 0;
 
-        try {
-            serial_port.setReadBufferSize(256);
-            serial_port.setTimeout(1.0);
-            serial_port.enableTermination('\n');
-            serial_port.flush();
-            serial_port.reset();
-        } catch (RuntimeException ex) {
-            ex.printStackTrace();
-        }
-
         byte[] stream_command = new byte[256];
         byte[] integration_control_command = new byte[256];
         IMUProtocol.StreamResponse response = new IMUProtocol.StreamResponse();
@@ -168,19 +199,33 @@ class SerialIO implements IIOProvider {
         AHRSProtocol.IntegrationControl integration_control_response = new AHRSProtocol.IntegrationControl();
 
         int cmd_packet_length = IMUProtocol.encodeStreamCommand( stream_command, update_type, update_rate_hz ); 
-        try {
-            serial_port.reset();
-            serial_port.write( stream_command, cmd_packet_length );
-            cmd_packet_length = AHRSProtocol.encodeDataGetRequest( stream_command,  AHRSProtocol.AHRS_DATA_TYPE.BOARD_IDENTITY, (byte)0 ); 
-            serial_port.write( stream_command, cmd_packet_length );
-            serial_port.flush();
-            port_reset_count++;
-            if ( debug ) {
-                SmartDashboard.putNumber("navX Port Resets", (double)port_reset_count);
-            }
-            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();
-        } catch (RuntimeException ex) {
-            ex.printStackTrace();
+        boolean boardid_request_sent = false;
+        while(!boardid_request_sent) {
+	        try {
+	            serial_port.reset();
+	            serial_port.write( stream_command, cmd_packet_length );
+	            cmd_packet_length = AHRSProtocol.encodeDataGetRequest( stream_command,  AHRSProtocol.AHRS_DATA_TYPE.BOARD_IDENTITY, (byte)0 ); 
+	            serial_port.write( stream_command, cmd_packet_length );
+	            serial_port.flush();
+	            port_reset_count++;
+	            if ( debug ) {
+	                SmartDashboard.putNumber("navX Port Resets", (double)port_reset_count);
+	            }
+	            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();
+	            boardid_request_sent = true;
+                last_valid_packet_time = Timer.getFPGATimestamp();
+	            System.out.println("navX-MXP/Micro Connected " + (is_usb ? "via USB." : "via TTL UART."));
+	        } catch (RuntimeException ex) {
+	            //ex.printStackTrace();
+	        	if(serial_port == null) {
+	        		System.out.println("Unable to open " + (is_usb ? "USB " : "TTL UART ") + " serial port to communicate with navX-MXP/Micro"); 
+	        	} else {
+	        		System.out.println("Error sending navX-MXP/Micro configuration request over " + (is_usb ? "USB " : "TTL UART ") + " serial port.");
+	        		ex.printStackTrace();
+	        	}
+                Timer.delay(1.0);	            
+	    		resetSerialPort();
+	        }
         }
 
         int remainder_bytes = 0;
@@ -189,6 +234,13 @@ class SerialIO implements IIOProvider {
         while (!stop) {
             try {
 
+            	if( serial_port == null) {
+                    double update_rate = 1.0/((double)((int)(this.update_rate_hz & 0xFF)));
+                    Timer.delay(update_rate);
+                    if (debug) System.out.println("Initiating reset of serial port, as serial_port reference is null.");
+            		resetSerialPort();
+            		continue;
+            	}
                 // Wait, with delays to conserve CPU resources, until
                 // bytes have arrived.
 
@@ -198,6 +250,17 @@ class SerialIO implements IIOProvider {
                     next_integration_control_action = 0;
                     cmd_packet_length = AHRSProtocol.encodeIntegrationControlCmd( integration_control_command, integration_control );
                     try {
+                    	/* Ugly Hack.  This is a workaround for ARTF5478:           */
+                    	/* (USB Serial Port Write hang if receive buffer not empty. */
+                    	if (is_usb) {
+                            try {
+                                serial_port.reset();
+                            } catch (RuntimeException ex2) {
+                                /* Sometimes an unclean status exception occurs during reset(). */
+                                ex2.printStackTrace();
+                                resetSerialPort();
+                            }  
+                    	}
                         serial_port.write( integration_control_command, cmd_packet_length );
                     } catch (RuntimeException ex2) {
                         ex2.printStackTrace();
@@ -205,7 +268,8 @@ class SerialIO implements IIOProvider {
                 }               
 
                 if ( !stop && ( remainder_bytes == 0 ) && ( serial_port.getBytesReceived() < 1 ) ) {
-                    Timer.delay(1.0/update_rate_hz);
+                    double update_rate = 1.0/((double)((int)(this.update_rate_hz & 0xFF)));
+                    Timer.delay(update_rate);
                 }
 
                 int packets_received = 0;
@@ -284,6 +348,11 @@ class SerialIO implements IIOProvider {
                         if (packet_length > 0) {
                             packets_received++;
                             update_count++;
+                            if (!connect_reported) {
+                                notify_sink.connectDetected();
+                                connect_reported = true;
+                                disconnect_reported = false;
+                            }                            
                             last_valid_packet_time = Timer.getFPGATimestamp();
                             updates_in_last_second++;
                             if ((last_valid_packet_time - last_second_start_time ) > 1.0 ) {
@@ -299,7 +368,13 @@ class SerialIO implements IIOProvider {
                         {
                             packet_length = IMUProtocol.decodeStreamResponse(received_data, i, bytes_remaining, response);
                             if (packet_length > 0) {
+                            	System.out.println("navX-MXP/Micro Configuration Response Received.");
                                 packets_received++;
+                                if (!connect_reported) {
+                                    notify_sink.connectDetected();
+                                    connect_reported = true;
+                                    disconnect_reported = false;
+                                }                                
                                 dispatchStreamResponse(response);
                                 stream_response_received = true;
                                 i += packet_length;
@@ -318,6 +393,9 @@ class SerialIO implements IIOProvider {
                                         SmartDashboard.putNumber("navX Integration Control Response Count", integration_response_receive_count);
                                     }
                                     i += packet_length;
+                                    if ((integration_control.action & AHRSProtocol.NAVX_INTEGRATION_CTL_RESET_YAW)!=0) {
+                                    	this.notify_sink.yawResetComplete();
+                                    }                    
                                 } else {
                                     /* Even though a start-of-packet indicator was found, the  */
                                     /* current index is not the start of a packet if interest. */
@@ -447,17 +525,28 @@ class SerialIO implements IIOProvider {
 
                     // If a stream configuration response has not been received within three seconds
                     // of operation, (re)send a stream configuration request
-
                     if ( retransmit_stream_config ||
                             (!stream_response_received && ((Timer.getFPGATimestamp() - last_stream_command_sent_timestamp ) > 3.0 ) ) ) {
                         cmd_packet_length = IMUProtocol.encodeStreamCommand( stream_command, update_type, update_rate_hz ); 
                         try {
-                            resetSerialPort();
-                            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();
+                            System.out.println("Retransmitting stream configuration command to navX-MXP/Micro.");
+                        	/* Ugly Hack.  This is a workaround for ARTF5478:           */
+                        	/* (USB Serial Port Write hang if receive buffer not empty. */
+                            if (is_usb) {
+                                if (debug) System.out.println("Resetting serial port via reset().");
+                                try {
+                                    serial_port.reset();
+                                } catch (RuntimeException ex2) {
+                                    /* Sometimes an unclean status exception occurs during reset(). */
+                                    ex2.printStackTrace();
+                                    resetSerialPort();
+                                } 
+                            }                                                       
                             serial_port.write( stream_command, cmd_packet_length );
                             cmd_packet_length = AHRSProtocol.encodeDataGetRequest( stream_command,  AHRSProtocol.AHRS_DATA_TYPE.BOARD_IDENTITY, (byte)0 ); 
                             serial_port.write( stream_command, cmd_packet_length );
                             serial_port.flush();
+                            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();                             
                         } catch (RuntimeException ex2) {
                             ex2.printStackTrace();
                         }                                                    
@@ -465,7 +554,8 @@ class SerialIO implements IIOProvider {
                     else {                        
                         // If no bytes remain in the buffer, and not awaiting a response, sleep a bit
                         if ( stream_response_received && ( serial_port.getBytesReceived() == 0 ) ) {
-                            Timer.delay(1.0/update_rate_hz);
+                            double update_rate = 1.0/((double)((int)(this.update_rate_hz & 0xFF)));      
+                        	Timer.delay(update_rate);
                         }        
                     }
 
@@ -481,6 +571,7 @@ class SerialIO implements IIOProvider {
                 } else {
                     /* No data received this time around */
                     if ( Timer.getFPGATimestamp() - last_data_received_timestamp  > 1.0 ) {
+                        if (debug) System.out.println("Initiating Serial Port Reset since no data was received in the last second.");
                         resetSerialPort();
                     }                   
                 }
@@ -493,9 +584,20 @@ class SerialIO implements IIOProvider {
                     SmartDashboard.putString("navX Last Exception", ex.getMessage() + "; " + ex.toString());
                 }
                 ex.printStackTrace();
+                if (debug) System.out.println("Initiating Serial Port Reset due to exception during Run() loop.");                
                 resetSerialPort();
             }
         }
+        /* Close the serial port. */
+        if (serial_port != null) {
+            try {
+                serial_port.close();
+            } catch (Exception ex) {
+                // This has been seen to happen before....
+                ex.printStackTrace();                
+            }
+            serial_port = null;
+        }    
     }
     
     /**
@@ -556,5 +658,9 @@ class SerialIO implements IIOProvider {
         stop = true;
     }
     
+    @Override
+    public void enableLogging(boolean enable) {
+    	debug = enable;
+    }
     
 }

@@ -6,9 +6,11 @@
  */
 
 #include <sstream>
+#include <fstream>
 #include <string>
 #include <iomanip>
 #include <AHRS.h>
+#include <AHRSProtocol.h>
 #include "IIOProvider.h"
 #include "IIOCompleteNotification.h"
 #include "IBoardCapabilities.h"
@@ -17,16 +19,39 @@
 #include "ContinuousAngleTracker.h"
 #include "RegisterIOSPI.h"
 #include "RegisterIOI2C.h"
+#include "RegisterIOMau.h"
 #include "SerialIO.h"
+#include <hal/HAL.h>
+#include "SimIO.h"
+
+using namespace frc;
 
 static const uint8_t    NAVX_DEFAULT_UPDATE_RATE_HZ         = 60;
 static const int        YAW_HISTORY_LENGTH                  = 10;
 static const int16_t    DEFAULT_ACCEL_FSR_G                 = 2;
 static const int16_t    DEFAULT_GYRO_FSR_DPS                = 2000;
-static const uint32_t   MAX_SPI_BITRATE                     = 2000000;
-static const uint32_t   MIN_SPI_BITRATE                     = 100000;
 static const uint32_t   DEFAULT_SPI_BITRATE                 = 500000;
 static const uint8_t    NAVX_MXP_I2C_ADDRESS                = 0x32;
+
+static bool IsRaspbian() {
+	bool is_raspbian = false;
+
+	std::string raspbian_suffix("aspbian");
+	std::ifstream os_release_file;
+	os_release_file.open("/etc/os-release", std::ios::in);
+	if (os_release_file.fail()) return false;
+
+	std::string line;
+    while (getline(os_release_file, line)) {
+		if (line.find(raspbian_suffix) != std::string::npos) {
+			is_raspbian = true;
+			break;
+		}
+    }
+
+	os_release_file.close();
+	return is_raspbian;
+}
 
 class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
     AHRS *ahrs;
@@ -35,18 +60,21 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         this->ahrs = ahrs;
     }
 
+    virtual ~AHRSInternal() {}
+
     /***********************************************************/
     /* IIOCompleteNotification Interface Implementation        */
     /***********************************************************/
 
-    void SetYawPitchRoll(IMUProtocol::YPRUpdate& ypr_update) {
-        ahrs->yaw               = ypr_update.yaw;
-        ahrs->pitch             = ypr_update.pitch;
-        ahrs->roll              = ypr_update.roll;
-        ahrs->compass_heading   = ypr_update.compass_heading;
+    void SetYawPitchRoll(IMUProtocol::YPRUpdate& ypr_update, long sensor_timestamp) {
+        ahrs->yaw               	= ypr_update.yaw;
+        ahrs->pitch             	= ypr_update.pitch;
+        ahrs->roll              	= ypr_update.roll;
+        ahrs->compass_heading   	= ypr_update.compass_heading;
+        ahrs->last_sensor_timestamp	= sensor_timestamp;
     }
 
-    void SetAHRSPosData(AHRSProtocol::AHRSPosUpdate& ahrs_update) {
+    void SetAHRSPosData(AHRSProtocol::AHRSPosUpdate& ahrs_update, long sensor_timestamp) {
         /* Update base IMU class variables */
 
         ahrs->yaw                    = ahrs_update.yaw;
@@ -99,6 +127,20 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         ahrs->quaternionY                = ahrs_update.quat_y;
         ahrs->quaternionZ                = ahrs_update.quat_z;
 
+        ahrs->last_sensor_timestamp	= sensor_timestamp;
+
+        /* Notify external data arrival subscribers, if any. */
+        for (int i = 0; i < MAX_NUM_CALLBACKS; i++) {
+            ITimestampedDataSubscriber *callback = ahrs->callbacks[i];
+            if (callback != NULL) {
+            	long system_timestamp = (long)(Timer::GetFPGATimestamp() * 1000);
+                callback->timestampedDataReceived(system_timestamp,
+                		sensor_timestamp,
+                		ahrs_update,
+                		ahrs->callback_contexts[i]);
+            }
+        }
+
         ahrs->velocity[0]     = ahrs_update.vel_x;
         ahrs->velocity[1]     = ahrs_update.vel_y;
         ahrs->velocity[2]     = ahrs_update.vel_z;
@@ -106,10 +148,17 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         ahrs->displacement[1] = ahrs_update.disp_y;
         ahrs->displacement[2] = ahrs_update.disp_z;
 
+        UpdateBoardStatus(
+            ahrs_update.op_status,
+            ahrs_update.sensor_status,
+            ahrs_update.cal_status,
+            ahrs_update.selftest_status );
+
         ahrs->yaw_angle_tracker->NextAngle(ahrs->GetYaw());
+        ahrs->last_sensor_timestamp	= sensor_timestamp;
     }
 
-    void SetRawData(AHRSProtocol::GyroUpdate& raw_data_update) {
+    void SetRawData(AHRSProtocol::GyroUpdate& raw_data_update, long sensor_timestamp) {
         ahrs->raw_gyro_x     = raw_data_update.gyro_x;
         ahrs->raw_gyro_y     = raw_data_update.gyro_y;
         ahrs->raw_gyro_z     = raw_data_update.gyro_z;
@@ -120,9 +169,10 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         ahrs->cal_mag_y      = raw_data_update.mag_y;
         ahrs->cal_mag_z      = raw_data_update.mag_z;
         ahrs->mpu_temp_c     = raw_data_update.temp_c;
+        ahrs->last_sensor_timestamp	= sensor_timestamp;
     }
 
-    void SetAHRSData(AHRSProtocol::AHRSUpdate& ahrs_update) {
+    void SetAHRSData(AHRSProtocol::AHRSUpdate& ahrs_update, long sensor_timestamp) {
         /* Update base IMU class variables */
 
         ahrs->yaw                    = ahrs_update.yaw;
@@ -180,6 +230,26 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         ahrs->quaternionY                = ahrs_update.quat_y;
         ahrs->quaternionZ                = ahrs_update.quat_z;
 
+        ahrs->last_sensor_timestamp	= sensor_timestamp;
+
+        /* Notify external data arrival subscribers, if any. */
+        for (int i = 0; i < MAX_NUM_CALLBACKS; i++) {
+            ITimestampedDataSubscriber *callback = ahrs->callbacks[i];
+            if (callback != NULL) {
+            	long system_timestamp = (long)(Timer::GetFPGATimestamp() * 1000);
+                callback->timestampedDataReceived(system_timestamp,
+                		sensor_timestamp,
+                		ahrs_update,
+                		ahrs->callback_contexts[i]);
+            }
+        }
+
+        UpdateBoardStatus(
+            ahrs_update.op_status,
+            ahrs_update.sensor_status,
+            ahrs_update.cal_status,
+            ahrs_update.selftest_status );
+
         ahrs->UpdateDisplacement( ahrs->world_linear_accel_x,
                 ahrs->world_linear_accel_y,
                 ahrs->update_rate_hz,
@@ -195,16 +265,76 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
         ahrs->fw_ver_minor = board_id.fw_ver_minor;
     }
 
-    void SetBoardState(IIOCompleteNotification::BoardState& board_state) {
+    void SetBoardState(IIOCompleteNotification::BoardState& board_state, bool update_board_status) {
         ahrs->update_rate_hz = board_state.update_rate_hz;
         ahrs->accel_fsr_g = board_state.accel_fsr_g;
         ahrs->gyro_fsr_dps = board_state.gyro_fsr_dps;
         ahrs->capability_flags = board_state.capability_flags;
-        ahrs->op_status = board_state.op_status;
-        ahrs->sensor_status = board_state.sensor_status;
-        ahrs->cal_status = board_state.cal_status;
-        ahrs->selftest_status = board_state.selftest_status;
-     }
+        if (update_board_status) {
+            UpdateBoardStatus( board_state.op_status, board_state.sensor_status, board_state.cal_status, board_state.selftest_status );
+        }
+    }
+
+    void UpdateBoardStatus( uint8_t op_status, int16_t sensor_status, uint8_t cal_status, uint8_t selftest_status) {
+        /* Detect/Report Board operational status transitions */
+        bool poweron_init_completed = false;
+        if (ahrs->op_status == NAVX_OP_STATUS_NORMAL) {
+            if (op_status != NAVX_OP_STATUS_NORMAL) {
+                /* Board reset detected */
+                printf("navX-Sensor Reset Detected.\n");
+            }
+        } else {
+            if (op_status == NAVX_OP_STATUS_NORMAL) {
+                poweron_init_completed = true;
+                if ((cal_status & NAVX_CAL_STATUS_IMU_CAL_STATE_MASK) != NAVX_CAL_STATUS_IMU_CAL_COMPLETE) {
+                    printf("navX-Sensor startup initialization underway; startup calibration in progress.\n");
+                } else {
+                    printf("navX-Sensor startup initialization and startup calibration complete.\n");
+                }
+            }
+        }
+
+        /* Detect/report reset of yaw angle tracker upon transition to startup calibration complete state. */
+        if (((ahrs->cal_status & NAVX_CAL_STATUS_IMU_CAL_STATE_MASK) != NAVX_CAL_STATUS_IMU_CAL_COMPLETE) &&
+            ((cal_status & NAVX_CAL_STATUS_IMU_CAL_STATE_MASK) == NAVX_CAL_STATUS_IMU_CAL_COMPLETE)) {
+            printf("navX-Sensor onboard startup calibration complete.\n");
+            /* Carefully, only reset the software yaw reset offset if calibration completion upon */
+            /* initial poweron or after board reset occurs. */
+            if (poweron_init_completed || ahrs->disconnect_startupcalibration_recovery_pending) {
+                ahrs->disconnect_startupcalibration_recovery_pending = false;
+                ahrs->yaw_angle_tracker->Init();
+                printf("navX-Sensor Yaw angle auto-reset to 0.0 due to startup calibration.\n");
+            }
+        }
+
+        ahrs->op_status = op_status;
+        ahrs->sensor_status = sensor_status;
+        ahrs->cal_status = cal_status;
+        ahrs->selftest_status = selftest_status;
+    }
+
+	void YawResetComplete() {
+		ahrs->yaw_angle_tracker->Reset();
+        if (ahrs->enable_boardlevel_yawreset) {
+            printf("navX-Sensor Board-level Yaw Reset completed.\n");
+        } else {
+            printf("navX-Sensor Software Yaw Reset completed.\n");
+        }
+	}
+
+    void DisconnectDetected() {
+        /* Board disconnect may be caused by intermittent communication loss, or by board reset. */
+        /* Default status to error */
+        ahrs->op_status = NAVX_OP_STATUS_ERROR;
+        ahrs->sensor_status = 0; /* Clear all sensor status flags */
+        /* Flag the need to watch for a startup calibration completion event upon later reconnect. */
+        ahrs->disconnect_startupcalibration_recovery_pending = true;
+        printf("navX-Sensor DISCONNECTED!!!.\n");
+    }
+
+    void ConnectDetected() {
+        printf("navX-Sensor Connected.\n");
+    }
 
     /***********************************************************/
     /* IBoardCapabilities Interface Implementation        */
@@ -222,6 +352,11 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
     bool IsDisplacementSupported()
     {
         return (((ahrs->capability_flags & NAVX_CAPABILITY_FLAG_VEL_AND_DISP) != 0) ? true : false);
+    }
+
+    bool IsAHRSPosTimestampSupported()
+    {
+    	return (((ahrs->capability_flags & NAVX_CAPABILITY_FLAG_AHRSPOS_TS) != 0) ? true : false);
     }
 };
 
@@ -243,7 +378,8 @@ class AHRSInternal : public IIOCompleteNotification, public IBoardCapabilities {
  * @author Scott
  */
 
-AHRS::AHRS(SPI::Port spi_port_id, uint8_t update_rate_hz) {
+AHRS::AHRS(SPI::Port spi_port_id, uint8_t update_rate_hz) :
+            m_simDevice("navX-Sensor", spi_port_id) {
     SPIInit(spi_port_id, DEFAULT_SPI_BITRATE, update_rate_hz);
 }
 
@@ -268,13 +404,14 @@ AHRS::AHRS(SPI::Port spi_port_id, uint8_t update_rate_hz) {
  * @author Scott
  */
 
-AHRS::AHRS(SPI::Port spi_port_id, uint32_t spi_bitrate, uint8_t update_rate_hz) {
+AHRS::AHRS(SPI::Port spi_port_id, uint32_t spi_bitrate, uint8_t update_rate_hz) :
+            m_simDevice("navX-Sensor", spi_port_id) {
     SPIInit(spi_port_id, spi_bitrate, update_rate_hz);
 }
 
 /**
  * Constructs the AHRS class using I2C communication, overriding the
- * default update rate with a custom rate which may be from 4 to 60,
+ * default update rate with a custom rate which may be from 4 to 200,
  * representing the number of updates per second sent by the sensor.
  *<p>
  * This constructor should be used if communicating via I2C.
@@ -285,13 +422,14 @@ AHRS::AHRS(SPI::Port spi_port_id, uint32_t spi_bitrate, uint8_t update_rate_hz) 
  * @param i2c_port_id I2C Port to use
  * @param update_rate_hz Custom Update Rate (Hz)
  */
-AHRS::AHRS(I2C::Port i2c_port_id, uint8_t update_rate_hz) {
+AHRS::AHRS(I2C::Port i2c_port_id, uint8_t update_rate_hz) :
+            m_simDevice("navX-Sensor", i2c_port_id) {
     I2CInit(i2c_port_id, update_rate_hz);
 }
 
     /**
      * Constructs the AHRS class using serial communication, overriding the
-     * default update rate with a custom rate which may be from 4 to 60,
+     * default update rate with a custom rate which may be from 4 to 200,
      * representing the number of updates per second sent by the sensor.
      *<p>
      * This constructor should be used if communicating via either
@@ -309,7 +447,8 @@ AHRS::AHRS(I2C::Port i2c_port_id, uint8_t update_rate_hz) {
      * @param data_type either kProcessedData or kRawData
      * @param update_rate_hz Custom Update Rate (Hz)
      */
-AHRS::AHRS(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz) {
+AHRS::AHRS(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz) :
+            m_simDevice("navX-Sensor", serial_port_id) {
     SerialInit(serial_port_id, data_type, update_rate_hz);
 }
 
@@ -320,7 +459,8 @@ AHRS::AHRS(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint
  *<p>
  * @param spi_port_id SPI port to use.
  */
-AHRS::AHRS(SPI::Port spi_port_id) {
+AHRS::AHRS(SPI::Port spi_port_id) :
+            m_simDevice("navX-Sensor", spi_port_id) {
     SPIInit(spi_port_id, DEFAULT_SPI_BITRATE, NAVX_DEFAULT_UPDATE_RATE_HZ);
 }
 
@@ -332,7 +472,8 @@ AHRS::AHRS(SPI::Port spi_port_id) {
  *<p>
  * @param i2c_port_id I2C port to use
  */
-AHRS::AHRS(I2C::Port i2c_port_id) {
+AHRS::AHRS(I2C::Port i2c_port_id) :
+            m_simDevice("navX-Sensor", i2c_port_id) {
     I2CInit(i2c_port_id, NAVX_DEFAULT_UPDATE_RATE_HZ);
 }
 
@@ -346,7 +487,8 @@ AHRS::AHRS(I2C::Port i2c_port_id) {
  *<p>
  * @param serial_port_id SerialPort to use
  */
-AHRS::AHRS(SerialPort::Port serial_port_id) {
+AHRS::AHRS(SerialPort::Port serial_port_id) :
+            m_simDevice("navX-Sensor", serial_port_id) {
     SerialInit(serial_port_id, SerialDataType::kProcessedData, NAVX_DEFAULT_UPDATE_RATE_HZ);
 }
 
@@ -381,7 +523,7 @@ float AHRS::GetRoll() {
  * @return The current yaw value in degrees (-180 to 180).
  */
 float AHRS::GetYaw() {
-    if ( ahrs_internal->IsBoardYawResetSupported() ) {
+    if ( enable_boardlevel_yawreset && ahrs_internal->IsBoardYawResetSupported() ) {
         return this->yaw;
     } else {
         return (float) yaw_offset_tracker->ApplyOffset(this->yaw);
@@ -406,6 +548,9 @@ float AHRS::GetCompassHeading() {
     return compass_heading;
 }
 
+#define NUM_SUPPRESSED_SUCCESSIVE_YAWRESET_MESSAGES 5
+#define SUPPRESSED_SUCESSIVE_YAWRESET_PERIOD_SECONDS 0.2
+
 /**
  * Sets the user-specified yaw offset to the current
  * yaw value reported by the sensor.
@@ -413,12 +558,45 @@ float AHRS::GetCompassHeading() {
  * This user-specified yaw offset is automatically
  * subtracted from subsequent yaw values reported by
  * the getYaw() method.
+ *
+ * NOTE:  This method has no effect if the sensor is
+ * currently calibrating, since resetting the yaw will
+ * interfere with the calibration process.
  */
 void AHRS::ZeroYaw() {
-    if ( ahrs_internal->IsBoardYawResetSupported() ) {
+    double curr_timestamp = Timer::GetFPGATimestamp();
+    double delta_time_since_last_yawreset_request = curr_timestamp - last_yawreset_request_timestamp;
+    if (delta_time_since_last_yawreset_request < SUPPRESSED_SUCESSIVE_YAWRESET_PERIOD_SECONDS) {
+        successive_suppressed_yawreset_request_count++;
+        if ((successive_suppressed_yawreset_request_count % NUM_SUPPRESSED_SUCCESSIVE_YAWRESET_MESSAGES) == 1) {
+            if (logging_enabled) printf("navX-Sensor rapidly-repeated Yaw Reset ignored%s\n",
+            ((successive_suppressed_yawreset_request_count < NUM_SUPPRESSED_SUCCESSIVE_YAWRESET_MESSAGES)
+                ? "." : (" (repeated messages suppressed).")));
+        }
+        return;
+    }
+
+    if (IsCalibrating()) {
+        double delta_time_since_last_yawreset_while_calibrating_request =
+            curr_timestamp - last_yawreset_while_calibrating_request_timestamp;
+        if ((delta_time_since_last_yawreset_while_calibrating_request > SUPPRESSED_SUCESSIVE_YAWRESET_PERIOD_SECONDS)) {
+            printf("navX-Sensor Yaw Reset request ignored - startup calibration is currently in progress.\n");
+        }
+        last_yawreset_while_calibrating_request_timestamp = curr_timestamp;
+        return;
+    }
+
+    successive_suppressed_yawreset_request_count = 0;
+
+    last_yawreset_request_timestamp = curr_timestamp;
+    if ( enable_boardlevel_yawreset && ahrs_internal->IsBoardYawResetSupported() ) {
         io->ZeroYaw();
+        printf("navX-Sensor Board-level Yaw Reset requested.\n");
+        /* Note:  Notification is deferred until action is complete. */
     } else {
         yaw_offset_tracker->SetOffset();
+        /* Notification occurs immediately. */
+        ahrs_internal->YawResetComplete();
     }
 }
 
@@ -478,6 +656,19 @@ double AHRS::GetByteCount() {
  */
 double AHRS::GetUpdateCount() {
     return io->GetUpdateCount();
+}
+
+/**
+ * Returns the sensor timestamp corresponding to the
+ * last sample retrieved from the sensor.  Note that this
+ * sensor timestamp is only provided when the Register-based
+ * IO methods (SPI, I2C) are used; sensor timestamps are not
+ * provided when Serial-based IO methods (TTL UART, USB)
+ * are used.
+ * @return The sensor timestamp corresponding to the current AHRS sensor data.
+ */
+long AHRS::GetLastSensorTimestamp() {
+	return this->last_sensor_timestamp;
 }
 
 /**
@@ -667,7 +858,7 @@ bool AHRS::IsMagnetometerCalibrated()
  * @return Returns the imaginary portion (W) of the quaternion.
  */
 float AHRS::GetQuaternionW() {
-    return ((float)quaternionW / 16384.0f);
+    return quaternionW;
 }
 /**
  * Returns the real portion (X axis) of the Orientation Quaternion which
@@ -682,7 +873,7 @@ float AHRS::GetQuaternionW() {
  * @return Returns the real portion (X) of the quaternion.
  */
 float AHRS::GetQuaternionX() {
-    return ((float)quaternionX / 16384.0f);
+    return quaternionX;
 }
 /**
  * Returns the real portion (X axis) of the Orientation Quaternion which
@@ -700,7 +891,7 @@ float AHRS::GetQuaternionX() {
  * @return Returns the real portion (X) of the quaternion.
  */
 float AHRS::GetQuaternionY() {
-    return ((float)quaternionY / 16384.0f);
+    return quaternionY;
 }
 /**
  * Returns the real portion (X axis) of the Orientation Quaternion which
@@ -718,7 +909,7 @@ float AHRS::GetQuaternionY() {
  * @return Returns the real portion (X) of the quaternion.
  */
 float AHRS::GetQuaternionZ() {
-    return ((float)quaternionZ / 16384.0f);
+    return quaternionZ;
 }
 
 /**
@@ -825,27 +1016,129 @@ float AHRS::GetDisplacementZ() {
     return (ahrs_internal->IsDisplacementSupported() ? displacement[2] : 0.f);
 }
 
+/**
+ * Enables or disables logging (via Console I/O) of AHRS library internal
+ * behaviors, including events such as transient communication errors.
+ * @param enable
+ */
+void AHRS::EnableLogging(bool enable) {
+	if ( this->io != NULL) {
+		io->EnableLogging(enable);
+	}
+    logging_enabled = enable;
+}
+
+/**
+ * Enables or disables board-level yaw zero (reset) requests.  Board-level
+ * yaw resets are processed by the sensor board and the resulting yaw
+ * angle may not be available to the client software until at least
+ * 2 update cycles have occurred.  Board-level yaw resets however do
+ * maintain synchronization between the yaw angle and the sensor-generated
+ * Quaternion and Fused Heading values.
+ *
+ * Conversely, Software-based yaw resets occur instantaneously; however, Software-
+ * based yaw resets do not update the yaw angle component of the sensor-generated
+ * Quaternion values or the Fused Heading values.
+ * @param enable
+ */
+void AHRS::EnableBoardlevelYawReset(bool enable) {
+    enable_boardlevel_yawreset = enable;
+}
+
+/**
+ * Returns true if Board-level yaw resets are enabled.  Conversely, returns false
+ * if Software-based yaw resets are active.
+ *
+ * @return true if Board-level yaw resets are enabled.
+ */
+bool AHRS::IsBoardlevelYawResetEnabled() {
+    return enable_boardlevel_yawreset;
+}
+
+/**
+ * Returns the sensor full scale range (in degrees per second)
+ * of the X, Y and X-axis gyroscopes.
+ *
+ * @return gyroscope full scale range in degrees/second.
+ */
+int16_t AHRS::GetGyroFullScaleRangeDPS() {
+	return gyro_fsr_dps;
+}
+
+/**
+ * Returns the sensor full scale range (in G)
+ * of the X, Y and X-axis accelerometers.
+ *
+ * @return accelerometer full scale range in G.
+ */
+int16_t AHRS::GetAccelFullScaleRangeG() {
+	return accel_fsr_g;
+}
+
+#define NAVX_IO_THREAD_NAME "navXIOThread"
+
 void AHRS::SPIInit( SPI::Port spi_port_id, uint32_t bitrate, uint8_t update_rate_hz ) {
+    printf("Instantiating navX-Sensor on SPI Port %d.\n", spi_port_id);
     commonInit( update_rate_hz );
-    io = new RegisterIO(new RegisterIO_SPI(new SPI(spi_port_id), bitrate), update_rate_hz, ahrs_internal, ahrs_internal);
-    task = new Task("navX-MXP_IO", (FUNCPTR)AHRS::ThreadFunc,io);
+    if (m_simDevice) {
+        io = new SimIO(update_rate_hz, ahrs_internal, &m_simDevice);
+    } else {
+        #ifdef __linux__
+        if (IsRaspbian() && (spi_port_id == SPI::Port::kMXP)) {
+            io = new RegisterIOMau(update_rate_hz, ahrs_internal, ahrs_internal);
+        } else {
+            io = new RegisterIO(new RegisterIO_SPI(new SPI(spi_port_id), bitrate), update_rate_hz, ahrs_internal, ahrs_internal);
+        }
+        #else
+        io = new RegisterIO(new RegisterIO_SPI(new SPI(spi_port_id), bitrate), update_rate_hz, ahrs_internal, ahrs_internal);
+        #endif
+    }
+    task = new std::thread(AHRS::ThreadFunc, io);
 }
 
 void AHRS::I2CInit( I2C::Port i2c_port_id, uint8_t update_rate_hz ) {
+    printf("Instantiating navX-Sensor on I2C Port %d.\n", i2c_port_id);
     commonInit(update_rate_hz);
-    io = new RegisterIO(new RegisterIO_I2C(new I2C(i2c_port_id, NAVX_MXP_I2C_ADDRESS)), update_rate_hz, ahrs_internal, ahrs_internal);
-    task = new Task("navX-MXP_IO", (FUNCPTR)AHRS::ThreadFunc,io);
+    if (m_simDevice) {
+        io = new SimIO(update_rate_hz, ahrs_internal, &m_simDevice);
+    } else {    
+        #ifdef __linux__
+        if (IsRaspbian() && (i2c_port_id == I2C::Port::kMXP)) {
+            io = new RegisterIOMau(update_rate_hz, ahrs_internal, ahrs_internal);
+        } else {
+            io = new RegisterIO(new RegisterIO_I2C(new I2C(i2c_port_id, NAVX_MXP_I2C_ADDRESS)), update_rate_hz, ahrs_internal, ahrs_internal);
+        }
+        #else
+        io = new RegisterIO(new RegisterIO_I2C(new I2C(i2c_port_id, NAVX_MXP_I2C_ADDRESS)), update_rate_hz, ahrs_internal, ahrs_internal);
+        #endif
+    }
+    task = new std::thread(AHRS::ThreadFunc, io);
 }
 
 void AHRS::SerialInit(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz) {
+    printf("Instantiating navX-Sensor on Serial Port %d.\n", serial_port_id);
     commonInit(update_rate_hz);
-    bool processed_data = (data_type == SerialDataType::kProcessedData);
-    io = new SerialIO(serial_port_id, update_rate_hz, processed_data, ahrs_internal, ahrs_internal);
-    task = new Task("navX-MXP_IO", (FUNCPTR)AHRS::ThreadFunc,io);
+    if (m_simDevice) {
+        io = new SimIO(update_rate_hz, ahrs_internal, &m_simDevice);
+    } else {    
+        #ifdef __linux__
+        if (IsRaspbian() && (serial_port_id == SerialPort::Port::kMXP)) {
+            io = new RegisterIOMau(update_rate_hz, ahrs_internal, ahrs_internal);
+        } else {
+            bool processed_data = (data_type == SerialDataType::kProcessedData);
+            io = new SerialIO(serial_port_id, update_rate_hz, processed_data, ahrs_internal, ahrs_internal);
+        }
+        #else
+        bool processed_data = (data_type == SerialDataType::kProcessedData);
+        io = new SerialIO(serial_port_id, update_rate_hz, processed_data, ahrs_internal, ahrs_internal);
+        #endif
+    }
+    task = new std::thread(AHRS::ThreadFunc, io);
 }
 
 void AHRS::commonInit( uint8_t update_rate_hz ) {
 
+	HAL_Report(HALUsageReporting::kResourceType_NavX, 0);
     ahrs_internal = new AHRSInternal(this);
     this->update_rate_hz = update_rate_hz;
 
@@ -913,8 +1206,20 @@ void AHRS::commonInit( uint8_t update_rate_hz ) {
     last_sensor_timestamp = 0;
     last_update_time = 0;
 
-    table = 0;
     io = 0;
+
+    for ( int i = 0; i < MAX_NUM_CALLBACKS; i++) {
+    	callbacks[i] = NULL;
+    	callback_contexts[i] = NULL;
+    }
+
+	enable_boardlevel_yawreset = false;
+    last_yawreset_request_timestamp = 0;
+    last_yawreset_while_calibrating_request_timestamp = 0;
+    successive_suppressed_yawreset_request_count = 0;
+    disconnect_startupcalibration_recovery_pending = false;
+    logging_enabled = false;
+    SetName("navX-Sensor");
 }
 
 /**
@@ -934,7 +1239,7 @@ void AHRS::commonInit( uint8_t update_rate_hz ) {
  * from the Z-axis (yaw) gyro.
  */
 
-double AHRS::GetAngle() {
+double AHRS::GetAngle() const {
     return yaw_angle_tracker->GetAngle();
 }
 
@@ -946,8 +1251,39 @@ double AHRS::GetAngle() {
  * @return The current rate of change in yaw angle (in degrees per second)
  */
 
-double AHRS::GetRate() {
+double AHRS::GetRate() const {
     return yaw_angle_tracker->GetRate();
+}
+
+/**
+ * Sets an amount of angle to be automatically added before returning a
+ * angle from the getAngle() method.  This allows users of the getAngle() method
+ * to logically rotate the sensor by a given amount of degrees.
+ * <p>
+ * NOTE 1:  The adjustment angle is <b>only</b> applied to the value returned
+ * from getAngle() - it does not adjust the value returned from getYaw(), nor
+ * any of the quaternion values.
+ * <p>
+ * NOTE 2:  The adjustment angle is <b>not</b>automatically cleared whenever the
+ * sensor yaw angle is reset.
+ * <p>
+ * If not set, the default adjustment angle is 0 degrees (no adjustment).
+ * @param adjustment, in degrees (range:  -360 to 360)
+ */
+void AHRS::SetAngleAdjustment(double adjustment) {
+	yaw_angle_tracker->SetAngleAdjustment(adjustment);
+}
+
+/**
+ * Returns the currently configured adjustment angle.  See
+ * setAngleAdjustment() for more details.
+ *
+ * If this method returns 0 degrees, no adjustment to the value returned
+ * via getAngle() will occur.
+ * @param adjustment, in degrees (range:  -360 to 360)
+ */
+double AHRS::GetAngleAdjustment() {
+	return yaw_angle_tracker->GetAngleAdjustment();
 }
 
 /**
@@ -1162,34 +1498,12 @@ std::string AHRS::GetFirmwareVersion() {
 }
 
     /***********************************************************/
-    /* LiveWindowSendable Interface Implementation             */
+    /* SendableBase Interface Implementation                   */
     /***********************************************************/
 
-void AHRS::UpdateTable() {
-    if (table != 0) {
-        table->PutNumber("Value", GetYaw());
-    }
-}
-
-void AHRS::StartLiveWindowMode() {
-}
-
-void AHRS::StopLiveWindowMode() {
-}
-
-/* Are the two following functions still needed? */
-
-void AHRS::InitTable(std::shared_ptr<ITable> itable) {
-    table = itable;
-    UpdateTable();
-}
-
-std::shared_ptr<ITable> AHRS::GetTable() const {
-    return table;
-}
-
-std::string AHRS::GetSmartDashboardType() const {
-    return "Gyro";
+void AHRS::InitSendable(SendableBuilder& builder) {
+	builder.SetSmartDashboardType("Gyro");
+	builder.AddDoubleProperty("Value", [=]() { return GetYaw(); }, nullptr);
 }
 
 /***********************************************************/
@@ -1211,3 +1525,96 @@ int AHRS::ThreadFunc(IIOProvider *io_provider) {
     return 0;
 }
 
+/**
+ * Registers a callback interface.  This interface
+ * will be called back when new data is available,
+ * based upon a change in the sensor timestamp.
+ *<p>
+ * Note that this callback will occur within the context of the
+ * device IO thread, which is not the same thread context the
+ * caller typically executes in.
+ */
+bool AHRS::RegisterCallback( ITimestampedDataSubscriber *callback, void *callback_context) {
+    bool registered = false;
+    for ( int i = 0; i < MAX_NUM_CALLBACKS; i++ ) {
+        if (callbacks[i] == NULL) {
+            callbacks[i] = callback;
+            callback_contexts[i] = callback_context;
+            registered = true;
+            break;
+        }
+    }
+    return registered;
+}
+
+/**
+ * Deregisters a previously registered callback interface.
+ *
+ * Be sure to deregister any callback which have been
+ * previously registered, to ensure that the object
+ * implementing the callback interface does not continue
+ * to be accessed when no longer necessary.
+ */
+bool AHRS::DeregisterCallback( ITimestampedDataSubscriber *callback ) {
+    bool deregistered = false;
+    for ( int i = 0; i < MAX_NUM_CALLBACKS; i++ ) {
+        if (callbacks[i] == callback) {
+            callbacks[i] = NULL;
+            deregistered = true;
+            break;
+        }
+    }
+    return deregistered;
+}
+
+/**
+ * Returns the navX-Model device's currently configured update
+ * rate.  Note that the update rate that can actually be realized
+ * is a value evenly divisible by the navX-Model device's internal
+ * motion processor sample clock (200Hz).  Therefore, the rate that
+ * is returned may be lower than the requested sample rate.
+ *
+ * The actual sample rate is rounded down to the nearest integer
+ * that is divisible by the number of Digital Motion Processor clock
+ * ticks.  For instance, a request for 58 Hertz will result in
+ * an actual rate of 66Hz (200 / (200 / 58), using integer
+ * math.
+ *
+ * @return Returns the current actual update rate in Hz
+ * (cycles per second).
+ */
+
+int AHRS::GetActualUpdateRate() {
+    uint8_t actual_update_rate = GetActualUpdateRateInternal(GetRequestedUpdateRate());
+    return (int)actual_update_rate;
+}
+
+uint8_t AHRS::GetActualUpdateRateInternal(uint8_t update_rate) {
+#define NAVX_MOTION_PROCESSOR_UPDATE_RATE_HZ 200
+    int integer_update_rate = (int)update_rate;
+    int realized_update_rate = NAVX_MOTION_PROCESSOR_UPDATE_RATE_HZ /
+            (NAVX_MOTION_PROCESSOR_UPDATE_RATE_HZ / integer_update_rate);
+    return (uint8_t)realized_update_rate;
+}
+
+/**
+ * Returns the currently requested update rate.
+ * rate.  Note that not every update rate can actually be realized,
+ * since the actual update rate must be a value evenly divisible by
+ * the navX-Model device's internal motion processor sample clock (200Hz).
+ *
+ * To determine the actual update rate, use the
+ * {@link #getActualUpdateRate()} method.
+ *
+ * @return Returns the requested update rate in Hz
+ * (cycles per second).
+ */
+
+int AHRS::GetRequestedUpdateRate() {
+    return (int)update_rate_hz;
+}
+
+// Gyro interface implementation
+void AHRS::Calibrate() {
+
+}

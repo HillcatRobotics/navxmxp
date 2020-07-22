@@ -1,5 +1,5 @@
-#define NAVX_MXP_FIRMWARE_VERSION_MAJOR 	2
-#define NAVX_MXP_FIRMWARE_VERSION_MINOR		3
+#define NAVX_MXP_FIRMWARE_VERSION_MAJOR 	3
+#define NAVX_MXP_FIRMWARE_VERSION_MINOR		1
 
 #define NAVX_MXP_HARDWARE_VERSION_NUMBER    33 /* Revision 3.3 MXP IO */
 
@@ -35,3 +35,13 @@
 // 2.3: Sixth Release Version (12/21/2015)
 //       -  Maintenance release.  Fixed a few communications issues encountered during
 //          integration w/the new, v2 LabView Library.
+// 3.0: Seventh Release Version (5/19/2016)
+//       -  New Feature Release:
+//          - Updated firmware, C++/Java libraries to support 200Hz update rate
+//          - Added new "AHRSPosTimestamp" message, adding timestamp to serial packets
+//          - Updated navXUI to support 200Hz operation and new timestamp message
+//          - Updated navXUI to support save-to-file operation
+// 3.1: Eighth Release Vesrion (11/3/2018)
+//       - No changes to firmware
+//       - Modified FIRST FRC Libraries to not use the firmware-based yaw reset, due to timing issues
+//       - Updated build process to use gradle and support VS Code as required by WPI

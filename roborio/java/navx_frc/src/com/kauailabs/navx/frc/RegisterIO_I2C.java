@@ -14,9 +14,14 @@ import edu.wpi.first.wpilibj.I2C;
 class RegisterIO_I2C implements IRegisterIO{
 
     I2C port;
-    
+    boolean trace = false;
+    int successive_error_count;
+
+    static final int   NUM_IGNORED_SUCCESSIVE_ERRORS  = 50;
+
     public RegisterIO_I2C( I2C i2c_port ) {
         port = i2c_port;
+        successive_error_count = 0;
     }
     
     @Override
@@ -25,8 +30,18 @@ class RegisterIO_I2C implements IRegisterIO{
     }
 
     @Override
+    public void enableLogging(boolean enable) {
+    	trace = enable;
+    }    
+    
+    @Override
     public boolean write(byte address, byte value ) {
-        return port.write(address | 0x80, value);
+    	boolean aborted;
+    	synchronized(this){
+	        aborted = port.write(address | 0x80, value);
+    	}
+        if ( aborted && trace ) System.out.println("navX-MXP I2C Write Error");
+        return !aborted;
     }
 
     final static int MAX_WPILIB_I2C_READ_BYTES = 127;
@@ -37,14 +52,29 @@ class RegisterIO_I2C implements IRegisterIO{
         int buffer_offset = 0;
         while ( len > 0 ) {
             int read_len = (len > MAX_WPILIB_I2C_READ_BYTES) ? MAX_WPILIB_I2C_READ_BYTES : len;
-            byte[] read_buffer = new byte[read_len];
-            if (!port.write(first_address + buffer_offset, read_len) && 
-                !port.readOnly(read_buffer, read_len) ) {
+            byte[] read_buffer = new byte[read_len];      
+            boolean write_aborted;
+            boolean read_aborted = true;
+            synchronized(this){
+            	write_aborted = port.write(first_address + buffer_offset, read_len);
+            	if ( !write_aborted ) {
+            		read_aborted = port.readOnly(read_buffer, read_len);
+            	}
+            }
+            if ( !write_aborted && !read_aborted ) {
+                successive_error_count = 0;                
                 System.arraycopy(read_buffer, 0,  buffer, buffer_offset, read_len);
                 buffer_offset += read_len;
                 len -= read_len;
             } else {
-                break;
+                successive_error_count++;
+                if (successive_error_count % NUM_IGNORED_SUCCESSIVE_ERRORS == 1) {
+                    if (trace) {
+                        System.out.printf("navX-MXP I2C Read error %s.\n",
+                            ((successive_error_count < NUM_IGNORED_SUCCESSIVE_ERRORS) ? "" : " (Repeated errors omitted)"));
+                    }
+                }
+                return false;                
             }
         }
         return (len == 0);

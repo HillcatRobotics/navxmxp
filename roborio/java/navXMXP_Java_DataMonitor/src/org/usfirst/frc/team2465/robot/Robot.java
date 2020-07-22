@@ -1,7 +1,10 @@
 package org.usfirst.frc.team2465.robot;
 
 import com.kauailabs.navx.frc.AHRS;
+import com.kauailabs.navx.frc.AHRS.SerialDataType;
 
+import edu.wpi.cscore.UsbCamera;
+import edu.wpi.first.wpilibj.CameraServer;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.SPI;
@@ -37,15 +40,28 @@ public class Robot extends SampleRobot {
     Joystick stick;
  
     public Robot() {
-        stick = new Joystick(0);
+        //stick = new Joystick(0);
         try {
-            /* Communicate w/navX MXP via the MXP SPI Bus.                                     */
-            /* Alternatively:  I2C.Port.kMXP, SerialPort.Port.kMXP or SerialPort.Port.kUSB     */
-            /* See http://navx-mxp.kauailabs.com/guidance/selecting-an-interface/ for details. */
-            ahrs = new AHRS(SPI.Port.kMXP);
+			/***********************************************************************
+			 * navX-MXP:
+			 * - Communication via RoboRIO MXP (SPI, I2C, TTL UART) and USB.            
+			 * - See http://navx-mxp.kauailabs.com/guidance/selecting-an-interface.
+			 * 
+			 * navX-Micro:
+			 * - Communication via I2C (RoboRIO MXP or Onboard) and USB.
+			 * - See http://navx-micro.kauailabs.com/guidance/selecting-an-interface.
+			 * 
+			 * Multiple navX-model devices on a single robot are supported.
+			 ************************************************************************/
+            ahrs = new AHRS(SerialPort.Port.kUSB1);
+            //ahrs = new AHRS(SerialPort.Port.kMXP, SerialDataType.kProcessedData, (byte)50);
+            ahrs.enableLogging(true);
         } catch (RuntimeException ex ) {
             DriverStation.reportError("Error instantiating navX MXP:  " + ex.getMessage(), true);
         }
+        Timer.delay(1.0);
+    	//UsbCamera cam = CameraServer.getInstance().startAutomaticCapture();
+    	//cam.setResolution(640, 480);        
     }
 
     /**
@@ -63,7 +79,7 @@ public class Robot extends SampleRobot {
             
             Timer.delay(0.020);		/* wait for one motor update time period (50Hz)     */
             
-            boolean zero_yaw_pressed = stick.getTrigger();
+            boolean zero_yaw_pressed = false; //stick.getTrigger();
             if ( zero_yaw_pressed ) {
                 ahrs.zeroYaw();
             }
@@ -122,6 +138,7 @@ public class Robot extends SampleRobot {
             SmartDashboard.putNumber(   "RawMag_Y",             ahrs.getRawMagY());
             SmartDashboard.putNumber(   "RawMag_Z",             ahrs.getRawMagZ());
             SmartDashboard.putNumber(   "IMU_Temp_C",           ahrs.getTempC());
+            SmartDashboard.putNumber(   "IMU_Timestamp",        ahrs.getLastSensorTimestamp());
             
             /* Omnimount Yaw Axis Information                                           */
             /* For more info, see http://navx-mxp.kauailabs.com/installation/omnimount  */
