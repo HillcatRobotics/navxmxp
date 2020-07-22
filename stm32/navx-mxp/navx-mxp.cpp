@@ -86,7 +86,8 @@ uint8_t clip_sample_rate(uint8_t update_rate_hz)
 
 #define NUM_STREAMING_INTERFACES 2
 
-char update_type[NUM_STREAMING_INTERFACES] = { MSGID_YPR_UPDATE, MSGID_YPR_UPDATE };
+/* First interface is USB; second interface is TTL UART */
+char update_type[NUM_STREAMING_INTERFACES] = { MSGID_AHRSPOS_UPDATE, MSGID_YPR_UPDATE };
 char update_buffer[NUM_STREAMING_INTERFACES][AHRS_PROTOCOL_MAX_MESSAGE_LENGTH * 3];	/* Buffer for outbound serial update messages. */
 char inbound_data[AHRS_PROTOCOL_MAX_MESSAGE_LENGTH];			/* Buffer for inbound serial messages.  */
 char response_buffer[NUM_STREAMING_INTERFACES][AHRS_PROTOCOL_MAX_MESSAGE_LENGTH * 2];  /* Buffer for building serial response. */
@@ -494,7 +495,7 @@ int caldata_clear_count = 0;            /* Protection against flash wear */
 
 #define BUTTON_DEBOUNCE_SAMPLES 10
 
-static void cal_button_isr(void)
+static void cal_button_isr(unsigned char)
 {
     /* If CAL button held down for sufficient duration, clear accel/gyro cal data */
     bool button_pressed = false;
@@ -1728,12 +1729,7 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
                     /* SPI interface is still busy, reset the SPI interface. */
                     /* This condition occurs sometimes after the RoboRIO     */
                     /* host computer is power-cycled.                        */
-                    if ( ( (invalid_char_spi_receive_count % 5) == 0 ) &&
-                         ( __HAL_SPI_GET_FLAG(&hspi1,SPI_FLAG_BSY) != RESET ) ) {
-                        Reset_SPI();
-                   } else {
-                        HAL_SPI_Receive_DMA(&hspi1, (uint8_t *)spi1_RxBuffer,3);
-                   }
+                    Reset_SPI();
                 }
             } else {
                 wrong_size_spi_receive_count++;

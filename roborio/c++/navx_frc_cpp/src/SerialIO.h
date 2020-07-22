@@ -8,13 +8,16 @@
 #ifndef SRC_SERIALIO_H_
 #define SRC_SERIALIO_H_
 
-#include "WPILib.h"
 #include "IIOProvider.h"
 #include <stdint.h>
-#include <AHRSProtocol.h>
+#include "AHRSProtocol.h"
 #include "IMUProtocol.h"
 #include "IIOCompleteNotification.h"
 #include "IBoardCapabilities.h"
+#include "frc/SerialPort.h"
+#include "frc/smartdashboard/SmartDashboard.h"
+
+using namespace frc;
 
 class SerialIO : public IIOProvider {
 
@@ -40,6 +43,9 @@ class SerialIO : public IIOProvider {
     IBoardCapabilities *board_capabilities;
     double last_valid_packet_time;
     bool is_usb;
+    bool connect_reported;
+    bool disconnect_reported;
+    bool debug;
 
 public:
     SerialIO( SerialPort::Port port_id,

@@ -46,6 +46,9 @@ Source: "..\drivers\windows\dfu\*.*"; DestDir: "{app}\installers\dfu"; Flags: re
 Source: "..\c#\navXMagCalibrator\bin\Release\*.*"; DestDir: "{app}\navXMagCalibrator"; Flags: recursesubdirs
 Source: "..\c#\navXConfig\bin\Release\*.*"; DestDir: "{app}\navXConfig"; Flags: recursesubdirs
 Source: "..\c#\navXFirmwareUpdater\bin\Release\*.*"; DestDir: "{app}\navXFirmwareUpdater"; Flags: recursesubdirs
+; Include additional 32-bit Visual Studio 2013 Redistributable files (MFC120.dll; MSVCR120.dll; vcredist_x86
+; these files are referenced by the STMicroelectronics-provided STDUFiles.dll
+Source: "..\installers\visual_studio\*.*"; DestDir: "{app}\navXFirmwareUpdater"; Flags: recursesubdirs
 Source: "..\processing_output\*.*"; DestDir: "{app}\navXUI"; Flags: recursesubdirs
 Source: "weblinks\navx-mxp-software.url"; DestDir: "{app}"
 
@@ -54,13 +57,17 @@ Source: "..\roborio\java\navx_frc\src\com\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\j
 Source: "..\roborio\java\navx_frc\src\docs\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\java\docs"; Flags: recursesubdirs
 Source: "..\roborio\java\navx_frc\jar\navx_frc.jar"; DestDir: "{%HOMEPATH}\navx-mxp\java\lib"
 Source: "..\roborio\java\navx_frc\jar\navx_frc.jar"; DestDir: "{%HOMEPATH}\wpilib\user\java\lib"
-Source: "..\roborio\java\navXMXP_Java_DataMonitor\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\DataMonitor"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_Java_FieldCentricDrive\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\FieldCentricDrive"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_Java_RotateToAngle\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\RotateToAngle"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_Java_AutoBalance\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\AutoBalance"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_Java_CollisionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\CollisionDetection"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_Java_MotionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\MotionDetection"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\java\navXMXP_ExpansionIO\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\ExpansionIO"; Flags: createallsubdirs recursesubdirs
+; Install maven rep contents to %PUBLIC%\wpilib\2020\maven, following new convention for FRC 2020 Season
+Source: "..\..\..\..\.m2\repository\com\kauailabs\navx\*.*"; DestDir:  "{%PUBLIC}\wpilib\2020\maven\com\kauailabs\navx"; Flags:recursesubdirs
+; Install vendordeps JSON file to %PUBLIC\wpilib\2020\vendordeps
+Source: "..\build\vendordeps\*.json"; DestDir:  "{%PUBLIC}\wpilib\2020\vendordeps"
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_DataMonitor\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\DataMonitor"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_FieldCentricDrive\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\FieldCentricDrive"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_RotateToAngle\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\RotateToAngle"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_AutoBalance\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\AutoBalance"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_CollisionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\CollisionDetection"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_Java_MotionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\MotionDetection"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\java\VSCodeExamples\navXMXP_ExpansionIO\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\java\examples\vscode\ExpansionIO"; Flags: createallsubdirs recursesubdirs
 
 Source: "..\roborio\c++\navx_frc_cpp\Debug\*.a"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\lib"
 Source: "..\roborio\c++\navx_frc_cpp\Debug\*.a"; DestDir: "{%HOMEPATH}\wpilib\user\cpp\lib"
@@ -68,15 +75,16 @@ Source: "..\roborio\c++\navx_frc_cpp\include\*.*"; DestDir: "{%HOMEPATH}\navx-mx
 Source: "..\roborio\c++\navx_frc_cpp\include\*.*"; DestDir: "{%HOMEPATH}\wpilib\user\cpp\include"
 Source: "..\roborio\c++\navx_frc_cpp\src\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\src"; Flags: createallsubdirs recursesubdirs
 Source: "..\roborio\c++\doxygen\html\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\docs"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_DataMonitor\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\DataMonitor"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_FieldCentricDrive\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\FieldCentricDrive"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_RotateToAngle\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\RotateToAngle"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_AutoBalance\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\AutoBalance"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_CollisionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\CollisionDetection"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_MotionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\MotionDetection"; Flags: createallsubdirs recursesubdirs
-Source: "..\roborio\c++\navXMXP_CPP_ExpansionIO\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\ExpansionIO"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_DataMonitor\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\DataMonitor"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_FieldCentricDrive\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\FieldCentricDrive"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_RotateToAngle\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\RotateToAngle"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_AutoBalance\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\AutoBalance"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_CollisionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\CollisionDetection"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_MotionDetection\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\MotionDetection"; Flags: createallsubdirs recursesubdirs
+Source: "..\roborio\c++\VSCodeExamples\navXMXP_CPP_ExpansionIO\*.*"; Excludes: "build,dist,bin"; DestDir: "{%HOMEPATH}\navx-mxp\cpp\examples\vscode\ExpansionIO"; Flags: createallsubdirs recursesubdirs
 
-Source: "..\roborio\labview\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\labview"; Flags: createallsubdirs recursesubdirs
+; Remove installation of now-defunct navX-MXP library (this is now replaced by labviewae)
+;Source: "..\roborio\labview\*.*"; DestDir: "{%HOMEPATH}\navx-mxp\labview"; Flags: createallsubdirs recursesubdirs
 Source: "..\roborio\labviewae\*.*"; DestDir: "{code:GetLabVIEWDirName}vi.lib\Rock Robotics\WPI\ThirdParty\sensors\navX"; Flags: createallsubdirs recursesubdirs
 
 Source: "..\android\navx_ftc\build\outputs\aar\*.aar"; DestDir: "{%HOMEPATH}\navx-mxp\android\libs" 
@@ -92,6 +100,8 @@ Filename: "{app}\installers\vcp\Win8\dpinst_amd64.exe"; Parameters: "/SW"; Flags
 Filename: "{app}\installers\vcp\Win8\dpinst_x86.exe"; Parameters: "/SW"; Flags: 32bit; MinVersion: 0,6.2; Check: not IsWin64
 Filename: "{app}\installers\dfu\dpinst_amd64.exe"; Parameters: "/SW"; Flags: 64bit; Check: IsWin64
 Filename: "{app}\installers\dfu\dpinst_x86.exe"; Parameters: "/SW"; Flags: 32bit; Check: not IsWin64
+Filename: "{app}\navXFirmwareUpdater\vcredist_x86.exe"; Parameters: "/install /passive /norestart"; Flags:
+Filename: "{app}\navXFirmwareUpdater\vcredist_x86_vs2005SP1_redist_KB2538242.exe"; Parameters: "/q:a"; Flags:
 
 [Dirs]
 Name: "{app}\navXFirmwareUpdater"; Flags: uninsalwaysuninstall
@@ -108,7 +118,7 @@ var
 begin
   // initialize default path, which will be returned when the following registry
   // key queries fail due to missing keys or for some different reason
-  Result := 'C:\Program Files (x86)\National Instruments\LabVIEW 2017\';
+  Result := 'C:\Program Files (x86)\National Instruments\LabVIEW 2019\';
   // query the first registry value; if this succeeds, return the obtained value
   if RegQueryStringValue(HKLM, 'Software\National Instruments\LabVIEW\Current Version', 'Path', InstallPath) then
     Result := InstallPath;

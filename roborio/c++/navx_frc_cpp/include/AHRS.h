@@ -8,10 +8,19 @@
 #ifndef SRC_AHRS_H_
 #define SRC_AHRS_H_
 
-#include "WPILib.h"
+#include "frc/smartdashboard/SendableBase.h"
+#include "frc/smartdashboard/SendableBuilder.h"
+#include "frc/I2C.h"
+#include "frc/SPI.h"
+#include "frc/SerialPort.h"
+#include "frc/PIDSource.h"
+#include "frc/Timer.h"
+#include "frc/interfaces/Gyro.h"
 #include "ITimestampedDataSubscriber.h"
 #include "networktables/NetworkTableEntry.h"
 #include <thread>
+
+#include <hal/SimDevice.h>
 
 class IIOProvider;
 class ContinuousAngleTracker;
@@ -19,8 +28,10 @@ class InertialDataIntegrator;
 class OffsetTracker;
 class AHRSInternal;
 
-class AHRS : public SensorBase,
-             public PIDSource  {
+class AHRS : public frc::SendableBase,
+             public frc::ErrorBase,
+             public frc::PIDSource,
+             public frc::Gyro  {
 public:
 
     enum BoardAxis {
@@ -116,21 +127,31 @@ private:
 
     std::thread *           task;
 
+    // Simulation
+    hal::SimDevice m_simDevice;
+
 #define MAX_NUM_CALLBACKS 3
     ITimestampedDataSubscriber *callbacks[MAX_NUM_CALLBACKS];
     void *callback_contexts[MAX_NUM_CALLBACKS];
+	
+	bool enable_boardlevel_yawreset;
+    double last_yawreset_request_timestamp;
+    double last_yawreset_while_calibrating_request_timestamp;
+    uint32_t successive_suppressed_yawreset_request_count;
+    bool disconnect_startupcalibration_recovery_pending;
+    bool logging_enabled;
 
 public:
-    AHRS(SPI::Port spi_port_id);
-    AHRS(I2C::Port i2c_port_id);
-    AHRS(SerialPort::Port serial_port_id);
+    AHRS(frc::SPI::Port spi_port_id);
+    AHRS(frc::I2C::Port i2c_port_id);
+    AHRS(frc::SerialPort::Port serial_port_id);
 
-    AHRS(SPI::Port spi_port_id, uint8_t update_rate_hz);
-    AHRS(SPI::Port spi_port_id, uint32_t spi_bitrate, uint8_t update_rate_hz);
+    AHRS(frc::SPI::Port spi_port_id, uint8_t update_rate_hz);
+    AHRS(frc::SPI::Port spi_port_id, uint32_t spi_bitrate, uint8_t update_rate_hz);
 
-    AHRS(I2C::Port i2c_port_id, uint8_t update_rate_hz);
+    AHRS(frc::I2C::Port i2c_port_id, uint8_t update_rate_hz);
 
-    AHRS(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz);
+    AHRS(frc::SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz);
 
     float  GetPitch();
     float  GetRoll();
@@ -166,11 +187,11 @@ public:
     float  GetDisplacementX();
     float  GetDisplacementY();
     float  GetDisplacementZ();
-    double GetAngle();
-    double GetRate();
+    double GetAngle() const override;
+    double GetRate() const override;
     void   SetAngleAdjustment(double angle);
     double GetAngleAdjustment();
-    void   Reset();
+    void   Reset() override;
     float  GetRawGyroX();
     float  GetRawGyroY();
     float  GetRawGyroZ();
@@ -192,16 +213,24 @@ public:
     int GetRequestedUpdateRate();
 
     void EnableLogging(bool enable);
+	void EnableBoardlevelYawReset(bool enable);
+	bool IsBoardlevelYawResetEnabled();
+
+    int16_t GetGyroFullScaleRangeDPS();
+    int16_t GetAccelFullScaleRangeG();
+
+    // Gyro interface implementation
+    void Calibrate() override;
 
 private:
-    void SPIInit( SPI::Port spi_port_id, uint32_t bitrate, uint8_t update_rate_hz );
-    void I2CInit( I2C::Port i2c_port_id, uint8_t update_rate_hz );
-    void SerialInit(SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz);
+    void SPIInit( frc::SPI::Port spi_port_id, uint32_t bitrate, uint8_t update_rate_hz );
+    void I2CInit( frc::I2C::Port i2c_port_id, uint8_t update_rate_hz );
+    void SerialInit(frc::SerialPort::Port serial_port_id, AHRS::SerialDataType data_type, uint8_t update_rate_hz);
     void commonInit( uint8_t update_rate_hz );
     static int ThreadFunc(IIOProvider *io_provider);
 
-    /* Sendable implementation */
-    void InitSendable(frc::SendableBuilder&);
+    /* SendableBase implementation */
+    void InitSendable(frc::SendableBuilder& builder) override;
 
     /* PIDSource implementation */
     double PIDGet();

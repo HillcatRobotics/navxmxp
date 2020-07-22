@@ -41,6 +41,8 @@ class SerialIO implements IIOProvider {
 
     boolean debug = false; /* Set to true to enable debug output (to smart dashboard) */
     boolean is_usb;
+    boolean connect_reported;
+    boolean disconnect_reported;    
     
     public SerialIO( SerialPort.Port port_id, byte update_rate_hz, boolean processed_data, IIOCompleteNotification notify_sink, IBoardCapabilities board_capabilities ) {
         this.serial_port_id = port_id;
@@ -63,14 +65,21 @@ class SerialIO implements IIOProvider {
         } else {
             update_type = IMUProtocol.MSGID_GYRO_UPDATE;
         }
+        connect_reported = 
+            disconnect_reported = false;        
     }
     
     protected SerialPort resetSerialPort()
     {
         if (serial_port != null) {
+            if (connect_reported && !disconnect_reported && !isConnected()) {
+                notify_sink.disconnectDetected();
+                connect_reported = false;
+                disconnect_reported = true;
+            }            
     		System.out.println("Closing " + (is_usb ? "USB " : "TTL UART ") + " serial port to communicate with navX-MXP/Micro"); 
             try {
-                serial_port.free();
+                serial_port.close();
             } catch (Exception ex) {
                 // This has been seen to happen before....
             }
@@ -109,12 +118,22 @@ class SerialIO implements IIOProvider {
     protected void dispatchStreamResponse(IMUProtocol.StreamResponse response) {
         board_state.cal_status = (byte) (response.flags & IMUProtocol.NAV6_FLAG_MASK_CALIBRATION_STATE);
         board_state.capability_flags = (short) (response.flags & ~IMUProtocol.NAV6_FLAG_MASK_CALIBRATION_STATE);
-        board_state.op_status = 0x04; /* TODO:  Create a symbol for this */
-        board_state.selftest_status = 0x07; /* TODO:  Create a symbol for this */
+
+        /* Derive reasonable operational/self-test status from the available stream response data. */
+        if (board_state.cal_status == AHRSProtocol.NAVX_CAL_STATUS_IMU_CAL_COMPLETE) {
+            board_state.op_status = AHRSProtocol.NAVX_OP_STATUS_NORMAL;
+        } else {
+            board_state.op_status = AHRSProtocol.NAVX_OP_STATUS_IMU_AUTOCAL_IN_PROGRESS;
+        }
+        board_state.selftest_status = ( AHRSProtocol.NAVX_SELFTEST_STATUS_COMPLETE |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_GYRO_PASSED |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_ACCEL_PASSED |
+                                        AHRSProtocol.NAVX_SELFTEST_RESULT_BARO_PASSED );
+    
         board_state.accel_fsr_g = response.accel_fsr_g;
         board_state.gyro_fsr_dps = response.gyro_fsr_dps;
         board_state.update_rate_hz = (byte) response.update_rate_hz;
-        notify_sink.setBoardState(board_state);
+        notify_sink.setBoardState(board_state, true);
         /* If AHRSPOS_TS is update type is requested, but board doesn't support it, */
         /* retransmit the stream config, falling back to AHRSPos update mode, if    */
         /* the board supports it, otherwise fall all the way back to AHRS Update mode. */
@@ -217,7 +236,8 @@ class SerialIO implements IIOProvider {
 
             	if( serial_port == null) {
                     double update_rate = 1.0/((double)((int)(this.update_rate_hz & 0xFF)));
-            		Timer.delay(update_rate);
+                    Timer.delay(update_rate);
+                    if (debug) System.out.println("Initiating reset of serial port, as serial_port reference is null.");
             		resetSerialPort();
             		continue;
             	}
@@ -233,7 +253,13 @@ class SerialIO implements IIOProvider {
                     	/* Ugly Hack.  This is a workaround for ARTF5478:           */
                     	/* (USB Serial Port Write hang if receive buffer not empty. */
                     	if (is_usb) {
-                    		serial_port.reset();
+                            try {
+                                serial_port.reset();
+                            } catch (RuntimeException ex2) {
+                                /* Sometimes an unclean status exception occurs during reset(). */
+                                ex2.printStackTrace();
+                                resetSerialPort();
+                            }  
                     	}
                         serial_port.write( integration_control_command, cmd_packet_length );
                     } catch (RuntimeException ex2) {
@@ -322,6 +348,11 @@ class SerialIO implements IIOProvider {
                         if (packet_length > 0) {
                             packets_received++;
                             update_count++;
+                            if (!connect_reported) {
+                                notify_sink.connectDetected();
+                                connect_reported = true;
+                                disconnect_reported = false;
+                            }                            
                             last_valid_packet_time = Timer.getFPGATimestamp();
                             updates_in_last_second++;
                             if ((last_valid_packet_time - last_second_start_time ) > 1.0 ) {
@@ -339,6 +370,11 @@ class SerialIO implements IIOProvider {
                             if (packet_length > 0) {
                             	System.out.println("navX-MXP/Micro Configuration Response Received.");
                                 packets_received++;
+                                if (!connect_reported) {
+                                    notify_sink.connectDetected();
+                                    connect_reported = true;
+                                    disconnect_reported = false;
+                                }                                
                                 dispatchStreamResponse(response);
                                 stream_response_received = true;
                                 i += packet_length;
@@ -489,23 +525,28 @@ class SerialIO implements IIOProvider {
 
                     // If a stream configuration response has not been received within three seconds
                     // of operation, (re)send a stream configuration request
-
                     if ( retransmit_stream_config ||
                             (!stream_response_received && ((Timer.getFPGATimestamp() - last_stream_command_sent_timestamp ) > 3.0 ) ) ) {
                         cmd_packet_length = IMUProtocol.encodeStreamCommand( stream_command, update_type, update_rate_hz ); 
                         try {
-                        	System.out.println("Retransmitting stream configuration command to navX-MXP/Micro.");
-                            resetSerialPort();
-                            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();
+                            System.out.println("Retransmitting stream configuration command to navX-MXP/Micro.");
                         	/* Ugly Hack.  This is a workaround for ARTF5478:           */
                         	/* (USB Serial Port Write hang if receive buffer not empty. */
-                        	if (is_usb) {
-                        		serial_port.reset();
-                        	}                            
+                            if (is_usb) {
+                                if (debug) System.out.println("Resetting serial port via reset().");
+                                try {
+                                    serial_port.reset();
+                                } catch (RuntimeException ex2) {
+                                    /* Sometimes an unclean status exception occurs during reset(). */
+                                    ex2.printStackTrace();
+                                    resetSerialPort();
+                                } 
+                            }                                                       
                             serial_port.write( stream_command, cmd_packet_length );
                             cmd_packet_length = AHRSProtocol.encodeDataGetRequest( stream_command,  AHRSProtocol.AHRS_DATA_TYPE.BOARD_IDENTITY, (byte)0 ); 
                             serial_port.write( stream_command, cmd_packet_length );
                             serial_port.flush();
+                            last_stream_command_sent_timestamp = Timer.getFPGATimestamp();                             
                         } catch (RuntimeException ex2) {
                             ex2.printStackTrace();
                         }                                                    
@@ -530,6 +571,7 @@ class SerialIO implements IIOProvider {
                 } else {
                     /* No data received this time around */
                     if ( Timer.getFPGATimestamp() - last_data_received_timestamp  > 1.0 ) {
+                        if (debug) System.out.println("Initiating Serial Port Reset since no data was received in the last second.");
                         resetSerialPort();
                     }                   
                 }
@@ -542,15 +584,17 @@ class SerialIO implements IIOProvider {
                     SmartDashboard.putString("navX Last Exception", ex.getMessage() + "; " + ex.toString());
                 }
                 ex.printStackTrace();
+                if (debug) System.out.println("Initiating Serial Port Reset due to exception during Run() loop.");                
                 resetSerialPort();
             }
         }
         /* Close the serial port. */
         if (serial_port != null) {
             try {
-                serial_port.free();
+                serial_port.close();
             } catch (Exception ex) {
                 // This has been seen to happen before....
+                ex.printStackTrace();                
             }
             serial_port = null;
         }    

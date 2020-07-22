@@ -15,7 +15,7 @@
 #include "AHRSProtocol.h"
 #include "IBoardCapabilities.h"
 #include "IIOCompleteNotification.h"
-#include "WPILib.h"
+#include "frc/Timer.h"
 
 class RegisterIO : public IIOProvider {
 private:
@@ -33,6 +33,8 @@ private:
     int byte_count;
     int update_count;
     long last_sensor_timestamp;
+    bool disconnect_reported;
+    bool connect_reported;
 public:
     RegisterIO( IRegisterIO *io_provider,
                 uint8_t update_rate_hz,

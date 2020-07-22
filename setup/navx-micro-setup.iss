@@ -10,7 +10,7 @@
 ; NOTE: The value of AppId uniquely identifies this application.
 ; Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{B8D8466D-9D83-4F6A-922B-9BE227E48E5B}
+AppId={{B8D8466D-9D83-4F6A-922B-9BE227E48E5C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -46,6 +46,9 @@ Source: "..\drivers\windows\dfu\*.*"; DestDir: "{app}\installers\dfu"; Flags: re
 Source: "..\c#\navXMagCalibrator\bin\Release\*.*"; DestDir: "{app}\navXMagCalibrator"; Flags: recursesubdirs
 Source: "..\c#\navXConfig\bin\Release\*.*"; DestDir: "{app}\navXConfig"; Flags: recursesubdirs
 Source: "..\c#\navXFirmwareUpdater\bin\Release\*.*"; DestDir: "{app}\navXFirmwareUpdater"; Flags: recursesubdirs
+; Include additional 32-bit Visual Studio 2013 Redistributable files (MFC120.dll; MSVCR120.dll; vcredist_x86
+; these files are referenced by the STMicroelectronics-provided STDUFiles.dll
+Source: "..\installers\visual_studio\*.*"; DestDir: "{app}\navXFirmwareUpdater"; Flags: recursesubdirs
 Source: "..\processing_output\*.*"; DestDir: "{app}\navXUI"; Flags: recursesubdirs
 Source: "weblinks\navx-micro-software.url"; DestDir: "{app}"
 
@@ -74,6 +77,8 @@ Filename: "{app}\installers\vcp\Win8\dpinst_amd64.exe"; Parameters: "/SW"; Flags
 Filename: "{app}\installers\vcp\Win8\dpinst_x86.exe"; Parameters: "/SW"; Flags: 32bit; MinVersion: 0,6.2; Check: not IsWin64
 Filename: "{app}\installers\dfu\dpinst_amd64.exe"; Parameters: "/SW"; Flags: 64bit; Check: IsWin64
 Filename: "{app}\installers\dfu\dpinst_x86.exe"; Parameters: "/SW"; Flags: 32bit; Check: not IsWin64
+Filename: "{app}\navXFirmwareUpdater\vcredist_x86.exe"; Parameters: "/install /passive /norestart"; Flags:
+Filename: "{app}\navXFirmwareUpdater\vcredist_x86_vs2005SP1_redist_KB2538242.exe"; Parameters: "/q:a"; Flags:
 
 [Dirs]
 Name: "{app}\navXFirmwareUpdater"; Flags: uninsalwaysuninstall
